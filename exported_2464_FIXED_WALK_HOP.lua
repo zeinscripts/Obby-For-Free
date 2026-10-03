@@ -1,10 +1,81 @@
--- FIXED EXPORT 2464 frames - WITH WALK CYCLE + ROTATE + STOP + PAUSE
--- This fixes the teleport issue - now does same as main recorder
--- 1. Rotate to face first pos, 2. Walk at WalkSpeed with walk cycle (pause if cycle ends early), 3. Stop/idle on reach, 4. Rotate, then play
+-- Expert Obby For Free - ALL IN ONE
+-- Walk to first pos + walk cycle + pause + stop + loop + respawn-proof + auto-rejoin on kick
+-- Single file, no wrapper needed
 
 local Players = game:GetService("Players")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
+
+-- AUTO REJOIN SETUP - makes script run again after teleport
+local queueteleport = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport)
+if queueteleport then
+    -- CHANGE THIS URL TO YOUR SINGLE FILE URL AFTER YOU UPLOAD IT
+    queueteleport('loadstring(game:HttpGet("https://github.com/zeinscripts/Obby-For-Free/raw/refs/heads/main/exported_2464_FIXED_WALK_HOP.lua"))()')
+    print("✅ Auto-rejoin enabled")
+end
+
+local function getSmallestServer()
+    local success, result = pcall(function()
+        return game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100")
+    end)
+    if success then
+        local ok, data = pcall(function() return HttpService:JSONDecode(result) end)
+        if ok and data and data.data then
+            local smallest = nil
+            local minPlayers = 999
+            for _, srv in ipairs(data.data) do
+                if srv.playing < minPlayers and srv.id ~= game.JobId and srv.maxPlayers > srv.playing then
+                    minPlayers = srv.playing
+                    smallest = srv
+                end
+            end
+            return smallest
+        end
+    end
+    return nil
+end
+
+local function serverHop()
+    print("🔄 Kicked - hopping to smallest server...")
+    local smallest = getSmallestServer()
+    if smallest then
+        TeleportService:TeleportToPlaceInstance(game.PlaceId, smallest.id, player)
+    else
+        TeleportService:Teleport(game.PlaceId, player)
+    end
+end
+
+-- Detect kick
+pcall(function()
+    game:GetService("CoreGui").RobloxPromptGui.promptOverlay.ChildAdded:Connect(function(child)
+        if child.Name == "ErrorPrompt" then
+            task.wait(2)
+            local txt = ""
+            pcall(function() txt = child:FindFirstChild("MessageArea").ErrorFrame.MessageLabel.Text end)
+            if string.find(string.lower(txt), "banned") then return end
+            serverHop()
+        end
+    end)
+end)
+
+pcall(function()
+    game:GetService("GuiService").ErrorMessageChanged:Connect(function(msg)
+        if msg and msg ~= "" then
+            task.wait(2)
+            serverHop()
+        end
+    end)
+end)
+
+TeleportService.TeleportInitFailed:Connect(function(p, result, err)
+    if p == player then
+        task.wait(2)
+        serverHop()
+    end
+end)
+
 
 local function fixCF(x,y,z,r00,r01,r02,r10,r11)
  local r12
@@ -2693,51 +2764,65 @@ local data = {
 {t=37.297,hrp="-237.308,-22.245,-2179.298,0.0036,-1.6537,0.0005",motors={"-0.032,-0.129,-0.015,0.0007,-0.0008,1.0380","-0.289,-0.043,0.021,-0.0343,0.0603,-0.9731","0.000,0.000,0.000,0.0301,0.0009,0.0348","0.005,-0.201,-0.011,-0.0029,0.0395,0.7894","-0.199,0.073,0.005,-0.0429,-0.0533,-0.7817","0.000,0.000,-0.000,0.0000,0.0000,-0.0000"}},
 }
 
+-- AUTOSTART WITH WALK TO FIRST POS - RESPAWN PROOF + LOOP
 
--- AUTOSTART WITH WALK TO FIRST POS
-local char = player.Character or player.CharacterAdded:Wait()
-local hrp = char:WaitForChild('HumanoidRootPart')
-local hum = char:WaitForChild('Humanoid')
-local motors = getMotors(char)
-local motorMap = getMotorMap(char)
+local function getMotors(c) local m={} for _,v in ipairs(c:GetDescendants()) do if v:IsA('Motor6D') then table.insert(m,v) end end table.sort(m,function(a,b) return a.Name<b.Name end) return m end
+local function getMotorMap(c) local map={} for _,v in ipairs(c:GetDescendants()) do if v:IsA('Motor6D') then map[v.Name]=v end end return map end
 
-local anim = hum:FindFirstChildOfClass('Animator')
-if anim then anim:Destroy() end
-hum.EvaluateStateMachine = false
-hum.PlatformStand = true
-hum.AutoRotate = false
-for _,v in ipairs(char:GetDescendants()) do if v:IsA('BasePart') then v.CanCollide = false end end
-
+local char, hrp, hum, motors, motorMap
 local walkFrames = WALK_CYCLE.frames
 local walkMotorNames = WALK_CYCLE.motorNames
-local walkSpeed = hum.WalkSpeed
-if walkSpeed <= 0 then walkSpeed = 16 end
 
-local startPos = hrp.Position
-local startHrp = hrp.CFrame
-local firstFrame = data[1]
-local firstHrp = cfFrom6(firstFrame.hrp)
-local endPos = firstHrp.Position
-local targetCF = firstHrp
-local dist = (endPos - startPos).Magnitude
-local shouldWalk = dist > 2
+local function setupCharacter(newChar)
+    char = newChar
+    hrp = char:WaitForChild('HumanoidRootPart', 10)
+    hum = char:WaitForChild('Humanoid', 10)
+    if not hrp or not hum then return false end
+    motors = getMotors(char)
+    motorMap = getMotorMap(char)
+    local anim = hum:FindFirstChildOfClass('Animator')
+    if anim then anim:Destroy() end
+    hum.EvaluateStateMachine = false
+    hum.PlatformStand = true
+    hum.AutoRotate = false
+    for _,v in ipairs(char:GetDescendants()) do if v:IsA('BasePart') then v.CanCollide = false end end
+    return true
+end
 
-local flatDir = Vector3.new(endPos.X - startPos.X, 0, endPos.Z - startPos.Z)
-local facingCF = startHrp
-if flatDir.Magnitude > 0.1 then facingCF = CFrame.lookAt(startPos, startPos + flatDir) end
+setupCharacter(player.Character or player.CharacterAdded:Wait())
 
-local _, startYaw, _ = startHrp:ToEulerAnglesYXZ()
-local _, targetYaw, _ = facingCF:ToEulerAnglesYXZ()
-local yawDiff = math.abs((targetYaw - startYaw + math.pi) % (2*math.pi) - math.pi)
-local initialRotateDuration = math.clamp(yawDiff / math.rad(400) * 0.25 + 0.05, 0.05, 0.25)
-
+local startPos, startHrp, firstHrp, endPos, targetCF, dist, shouldWalk, flatDir, facingCF
+local yawDiff, initialRotateDuration, totalMoveTime
 local walkCycleDuration = walkFrames[#walkFrames].t - walkFrames[1].t
 local pauseDuration = 0.4
 local loopDuration = walkCycleDuration + pauseDuration
 if walkCycleDuration <= 0 then walkCycleDuration = 1 end
 
-local totalMoveTime = dist / walkSpeed
-if totalMoveTime < 0.1 then totalMoveTime = 0.1 end
+local function resetForLoop()
+    if not hrp or not hrp.Parent then return false end
+    local walkSpeed = hum.WalkSpeed
+    if walkSpeed <= 0 then walkSpeed = 16 end
+    
+    startPos = hrp.Position
+    startHrp = hrp.CFrame
+    firstHrp = cfFrom6(data[1].hrp)
+    endPos = firstHrp.Position
+    targetCF = firstHrp
+    dist = (endPos - startPos).Magnitude
+    shouldWalk = dist > 2
+    flatDir = Vector3.new(endPos.X - startPos.X, 0, endPos.Z - startPos.Z)
+    facingCF = startHrp
+    if flatDir.Magnitude > 0.1 then facingCF = CFrame.lookAt(startPos, startPos + flatDir) end
+    local _, sYaw, _ = startHrp:ToEulerAnglesYXZ()
+    local _, tYaw, _ = facingCF:ToEulerAnglesYXZ()
+    yawDiff = math.abs((tYaw - sYaw + math.pi) % (2*math.pi) - math.pi)
+    initialRotateDuration = math.clamp(yawDiff / math.rad(400) * 0.25 + 0.05, 0.05, 0.25)
+    totalMoveTime = dist / walkSpeed
+    if totalMoveTime < 0.1 then totalMoveTime = 0.1 end
+    return true
+end
+
+resetForLoop()
 
 local phase = shouldWalk and "initialRotate" or "reached"
 local phaseStart = tick()
@@ -2750,8 +2835,31 @@ local reachedPauseUntil = 0
 
 print("1️⃣ Rotating to face first pos...")
 
+-- Respawn handler - will restart loop when you die
+player.CharacterAdded:Connect(function(newChar)
+    print("💀 Died/Respawned - waiting for new character...")
+    task.wait(1)
+    if setupCharacter(newChar) then
+        task.wait(0.5)
+        resetForLoop()
+        phase = shouldWalk and "initialRotate" or "reached"
+        phaseStart = tick()
+        rotateStartCF = startHrp
+        finalRotateStartCF = nil
+        playStart = 0
+        index = 1
+        reachedPauseUntil = 0
+        print("🔄 Respawned - restarting walk to first pos...")
+    end
+end)
+
 local con
 con = RunService.Heartbeat:Connect(function()
+    -- Check if character died/respawned or hrp invalid
+    if not char or not char.Parent or not hrp or not hrp.Parent or not hum or hum.Health <= 0 then
+        return
+    end
+    
     if phase == "initialRotate" then
         local elapsed = tick() - phaseStart
         local alpha = math.clamp(elapsed / initialRotateDuration, 0, 1)
@@ -2762,7 +2870,7 @@ con = RunService.Heartbeat:Connect(function()
         if alpha >= 1 then
             phase = "walk"
             phaseStart = tick()
-            print("2️⃣ Walking at WalkSpeed "..math.floor(walkSpeed))
+            print("2️⃣ Walking at WalkSpeed "..math.floor(hum.WalkSpeed))
         end
         return
     end
@@ -2865,6 +2973,37 @@ con = RunService.Heartbeat:Connect(function()
         return
     end
 
+    if phase == "waitLoop" then
+        -- Lock to last frame position during wait - no sinking, no teleport
+        if hrp and hrp.Parent then
+            local lastCF = cfFrom6(data[total].hrp)
+            hrp.CFrame = lastCF
+            hrp.AssemblyLinearVelocity = Vector3.zero
+            hrp.AssemblyAngularVelocity = Vector3.zero
+            hum.PlatformStand = true
+            -- Keep idle pose
+            local idle = walkFrames[1]
+            for j, mName in ipairs(walkMotorNames) do
+                local motorObj = motorMap[mName]
+                if motorObj and idle.motors[j] then motorObj.Transform = idle.motors[j] end
+            end
+        end
+        if tick() - phaseStart >= 5 then
+            if resetForLoop() then
+                phase = shouldWalk and "initialRotate" or "reached"
+                phaseStart = tick()
+                rotateStartCF = startHrp
+                finalRotateStartCF = nil
+                playStart = 0
+                index = 1
+                reachedPauseUntil = 0
+                print("🔄 Looping - 1️⃣ Rotating to face first pos again...")
+            end
+        end
+        return
+    end
+
+    -- REPLAY
     local elapsed = tick() - playStart
     while index < total and data[index + 1].t <= elapsed do index += 1 end
     local curr = data[index]
@@ -2884,39 +3023,8 @@ con = RunService.Heartbeat:Connect(function()
         for i,m in ipairs(motors) do if m.Parent then m.Transform=curMots[i] end end
     end
     if elapsed >= data[total].t then
-        con:Disconnect()
-        hrp.Anchored=false
-        hum.PlatformStand=false
-        hum.AutoRotate=true
-        hum.EvaluateStateMachine=true
-        print("✅ Done - waiting 2s then hopping to smallest server...")
-        task.wait(2)
-        -- Serverhop to smallest server
-        local TeleportService = game:GetService("TeleportService")
-        local HttpService = game:GetService("HttpService")
-        local success, response = pcall(function()
-            return game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?sortOrder=Asc&limit=100")
-        end)
-        if success then
-            local ok, data2 = pcall(function() return HttpService:JSONDecode(response) end)
-            if ok and data2 and data2.data then
-                local smallest = nil
-                local minPlayers = 999
-                for _, srv in ipairs(data2.data) do
-                    if srv.playing < minPlayers and srv.id ~= game.JobId and srv.maxPlayers > srv.playing then
-                        minPlayers = srv.playing
-                        smallest = srv
-                    end
-                end
-                if smallest then
-                    print("Hopping to server "..smallest.id.." with "..smallest.playing.." players")
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, smallest.id, player)
-                    return
-                end
-            end
-        end
-        -- Fallback: random hop if smallest not found
-        print("Smallest not found, random hopping...")
-        TeleportService:Teleport(game.PlaceId, player)
+        print("✅ Finished - waiting 5s then rerunning...")
+        phase = "waitLoop"
+        phaseStart = tick()
     end
 end)
